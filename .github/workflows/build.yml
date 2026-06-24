@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   android:
@@ -30,6 +31,10 @@ jobs:
             ${{ runner.os }}-gradle-
       - run: flutter pub get
       - run: flutter build apk --release --no-pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meshcore-open-apk
+          path: build/app/outputs/flutter-apk/*.apk
 
   ios:
     runs-on: macos-latest

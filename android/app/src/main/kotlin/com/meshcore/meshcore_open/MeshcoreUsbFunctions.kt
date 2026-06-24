@@ -28,6 +28,21 @@ class MeshcoreUsbFunctions(
 ) {
     private companion object {
         const val usbRecipientInterface = 0x01
+
+        // Silicon Labs CP210x (CP2102/CP2102N) vendor USB-serial protocol. These chips
+        // are NOT USB-CDC, so the CDC SET_LINE_CODING path in configureDevice() can't
+        // configure them (they expose no CDC control interface, so baud is never set and
+        // the port stays unconfigured -> handshake fails). These vendor control requests
+        // are what the chip actually understands (same set usb-serial-for-android uses).
+        const val cp210xVendorId = 0x10C4
+        const val cp210xReqTypeHostToDevice = 0x41 // DIR_OUT | TYPE_VENDOR | RECIP_INTERFACE
+        const val cp210xIfcEnable = 0x00
+        const val cp210xSetBaudRate = 0x1E
+        const val cp210xSetLineCtl = 0x03
+        const val cp210xSetMhs = 0x07
+        const val cp210xUartEnable = 0x0001
+        const val cp210xLineCtl8N1 = 0x0800 // 8 data bits, no parity, 1 stop bit
+        const val cp210xMhsDtrOffRtsOff = 0x0300 // DTR=0 RTS=0, both masked (de-assert)
     }
 
     private val usbMethodChannelName = "meshcore_open/android_usb_serial"
@@ -312,7 +327,7 @@ class MeshcoreUsbFunctions(
                 controlInterface = config.controlInterface
                 dataInterface = config.dataInterface
 
-                configureDevice(connection, config, baudRate)
+                configureDevice(connection, config, baudRate, device.vendorId)
 
                 connectedDeviceName = device.deviceName
                 startReadLoop()
@@ -384,7 +399,16 @@ class MeshcoreUsbFunctions(
         connection: UsbDeviceConnection,
         config: PortConfig,
         baudRate: Int,
+        vendorId: Int,
     ) {
+        // CP210x is vendor-class, not CDC: configure it with its own protocol. Without
+        // this it falls through to the CDC path below, finds no control interface, and
+        // returns having set nothing -> unconfigured port -> connect fails.
+        if (vendorId == cp210xVendorId) {
+            configureCp210x(connection, config.dataInterface.id, baudRate)
+            return
+        }
+
         val control = config.controlInterface ?: return
         val lineCoding =
             byteArrayOf(
@@ -428,6 +452,44 @@ class MeshcoreUsbFunctions(
         if (controlLineResult < 0) {
             throw IllegalStateException("Failed to configure USB control line state")
         }
+    }
+
+    private fun configureCp210x(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+        baudRate: Int,
+    ) {
+        fun vendorOut(request: Int, value: Int, data: ByteArray?, length: Int): Int =
+            connection.controlTransfer(
+                cp210xReqTypeHostToDevice,
+                request,
+                value,
+                interfaceId,
+                data,
+                length,
+                1000,
+            )
+
+        // Enable the UART
+        if (vendorOut(cp210xIfcEnable, cp210xUartEnable, null, 0) < 0) {
+            throw IllegalStateException("CP210x: IFC_ENABLE failed")
+        }
+        // Set baud rate (32-bit little-endian in the data phase)
+        val baud =
+            byteArrayOf(
+                (baudRate and 0xFF).toByte(),
+                ((baudRate shr 8) and 0xFF).toByte(),
+                ((baudRate shr 16) and 0xFF).toByte(),
+                ((baudRate shr 24) and 0xFF).toByte(),
+            )
+        if (vendorOut(cp210xSetBaudRate, 0, baud, baud.size) < 0) {
+            throw IllegalStateException("CP210x: SET_BAUDRATE failed")
+        }
+        // 8 data bits, no parity, 1 stop bit
+        vendorOut(cp210xSetLineCtl, cp210xLineCtl8N1, null, 0)
+        // De-assert DTR & RTS: avoids the AC-coupled reset pulse on DTR->RST boards
+        // (e.g. Wio-E5 / STM32WL on a USB-UART bridge). Firmware does not gate on DTR.
+        vendorOut(cp210xSetMhs, cp210xMhsDtrOffRtsOff, null, 0)
     }
 
     private fun startReadLoop() {
