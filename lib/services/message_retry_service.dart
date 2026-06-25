@@ -85,15 +85,6 @@ class MessageRetryService extends ChangeNotifier {
   /// shared globally; cap at 6 to leave two slots of headroom.
   static const int _maxGlobalInFlight = 6;
 
-  /// Safety watchdog (ms): the maximum time to wait for the device's
-  /// RESP_CODE_SENT after issuing a send. If it never arrives (dropped frame,
-  /// busy radio, or a send that silently failed) this fires a retry so the
-  /// message can't sit in [_activeMessages] forever and wedge the contact's
-  /// send queue. Generous enough to clear the connector's pre-send radio-quiet
-  /// wait (~3s). [updateMessageFromSent] replaces it with the real ACK timeout
-  /// once RESP_CODE_SENT arrives.
-  static const int _sentWatchdogMs = 10000;
-
   int _maxRetries = 5;
   int get maxRetries => _maxRetries;
 
@@ -390,15 +381,6 @@ class MessageRetryService extends ChangeNotifier {
     }
 
     config.sendMessage(contact, message.text, attempt, timestampSeconds);
-
-    // Safety watchdog: a missing RESP_CODE_SENT must not strand this message in
-    // _activeMessages forever — that wedges the per-contact send queue (one
-    // in-flight message per contact) and silently blocks all further sends to
-    // the contact (no TX at all). If RESP_CODE_SENT never arrives, this fires
-    // _handleTimeout (retry, then fail) which releases the in-flight slot.
-    // updateMessageFromSent() cancels/replaces it with the real ACK timeout when
-    // RESP_CODE_SENT arrives, so the normal delivery path is unaffected.
-    _startTimeoutTimer(messageId, _sentWatchdogMs);
   }
 
   bool updateMessageFromSent(int ackHash, int timeoutMs) {
