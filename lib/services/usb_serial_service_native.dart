@@ -196,6 +196,13 @@ class UsbSerialService {
           serial.setDTR(false);
           await Future<void>.delayed(const Duration(milliseconds: 50));
           serial.setDTR(true);
+          // DTR->RST boards (Seeed Wio-E5 / STM32WL on a USB-UART bridge with the
+          // stock 100nF DTR-reset cap): the rising DTR edge above AC-couples a reset
+          // pulse onto the MCU, so the board reboots (~1.2-1.9s). Wait for it before the
+          // caller fires the device-query handshake, otherwise the query races the boot
+          // and the connect times out. Harmless on boards that don't reset on DTR (adds
+          // a one-off connect delay); well inside the 5s command timeouts upstream.
+          await Future<void>.delayed(const Duration(milliseconds: 2500));
           _serial = serial;
           // Update the normalized port name to whichever candidate succeeded.
           normalizedPortName = candidate;
