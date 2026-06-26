@@ -166,9 +166,10 @@ class Contact {
       final type = reader.readByte();
       final flags = reader.readByte();
       final pathLen = reader.readByte();
-      final safePathLen = pathLen > 0
-          ? (pathLen > maxPathSize ? maxPathSize : pathLen)
-          : 0;
+      // 0xFF = flood sentinel, >maxPathSize = invalid — both mean "no path bytes".
+      // Previously 0xFF was clamped to maxPathSize, storing a bogus 64-byte all-zero
+      // path that surfaced in the UI/path editor as "64 hops of 00".
+      final safePathLen = (pathLen > 0 && pathLen <= maxPathSize) ? pathLen : 0;
       final pathBytes = reader.readBytes(maxPathSize).sublist(0, safePathLen);
       final name = reader.readCStringGreedy(maxNameSize);
 
